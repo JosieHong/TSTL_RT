@@ -1,0 +1,20 @@
+model:
+  in_dim: 21
+  add_num: 0
+  max_atom_num: 300
+  emb_dim: 512 
+  k: 5
+  dropout: 0.2
+  encode_layers: [64, 64, 128, 256]
+  decode_layers: [512, 256, 128, 32]
+
+train: 
+  epochs: 500
+  batch_size: 256 
+  num_workers: 0
+  early_stop_step: 50
+  weight_decay: 0.01 # L2 regularization (default: 0.001)
+  lr: 0.0001 
+  lr_factor: 0.1
+  lr_patience: 20
+  add_noise: 5

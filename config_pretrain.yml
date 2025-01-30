@@ -1,0 +1,28 @@
+model:
+  in_dim: 21
+  add_num: 0
+  max_atom_num: 300
+  emb_dim: 512 
+  k: 5
+  dropout: 0.2
+  encode_layers: [64, 64, 128, 256]
+  decode_layers: [512, 256, 128, 32]
+
+train: 
+  num_workers: 0
+  epochs: 100
+  early_stop_patience: 10 
+
+  warmup_epochs: 10 
+  warmup_lr: 0.0001
+  warmup_weight_decay: 0.001 # L2 regularization (default: 0.001)
+
+  k_shot: 64 # number of samples per task in finetuning
+  num_inner_steps: 3 # number of inner steps in finetuning
+  inner_lr: 0.0001
+  
+  outer_batch_size: 256 # number of samples per task in meta-training (pretraining)
+  meta_lr: 0.0001
+  meta_lr_factor: 0.1
+  meta_lr_patience: 5
+  meta_weight_decay: 0.001
