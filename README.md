@@ -1,14 +1,10 @@
-# TSTL_RT
+# A Task-Specific Transfer Learning Approach to Enhancing Small Molecule Retention Time Prediction with Limited Data
 
 [![CC BY-NC-SA 4.0][cc-by-nc-sa-shield]][cc-by-nc-sa] (free for academic use) 
 
-**A Task-Specific Transfer Learning Approach to Enhancing Small Molecule Retention Time Prediction with Limited Data**
-
-The manuscript will be published shortly.
-
 ## Set up
 
-1. Establish anaconda environment
+**Step 1**: Establish anaconda environment
 
 ```bash
 conda env create -f environment.yml
@@ -17,13 +13,13 @@ conda activate molnet
 
 We used PyTorch 1.13.1 with CUDA 11.7 during our experiments. Please use the appropriate versions for your device. 
 
-2. Download datasets
+**Step 2**: Download datasets
 
 ```bash
 git clone https://github.com/michaelwitting/RepoRT.git
 ```
 
-3. Data preprocessing
+**Step 3**: Data preprocessing
 
 ```bash
 python preprocess.py
@@ -47,7 +43,7 @@ Done.
 
 ## Pre-train and fine-tune
 
-1. Pre-training stage: 
+**Step 1**: Pre-training stage: 
 
 ```bash
 python run_tstl_pretrain.py \
@@ -75,7 +71,7 @@ python run_tstl_pretrain.py \
 --device 1
 ```
 
-2. Fine-tuning stage: 
+**Step 2**:  Fine-tuning stage: 
 
 ```bash
 python run_tstl_finetune.py --data ./data/benchmark/0063_rt_valid.csv \
@@ -90,6 +86,10 @@ python run_tstl_finetune.py --data ./data/benchmark/0063_rt_valid.csv \
 
 - [ ] make them running in parallel
 - [ ] LBFGS optimizer -->
+
+## Citation
+
+The manuscript will be published shortly. 
 
 ## License
 
