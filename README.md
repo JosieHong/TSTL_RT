@@ -1,6 +1,12 @@
-# A Task-Specific Transfer Learning Approach to Enhancing Small Molecule Retention Time Prediction with Limited Data
+# TSTL 
 
 [![CC BY-NC-SA 4.0][cc-by-nc-sa-shield]][cc-by-nc-sa] (free for academic use) 
+
+A Task-Specific Transfer Learning Approach to Enhancing Small Molecule Retention Time Prediction with Limited Data
+
+<p align="left">
+  <img src="./img/toc.png" width="350" title="TSTL">
+</p>
 
 ## Set up
 
@@ -79,7 +85,7 @@ python run_tstl_finetune.py --data ./data/benchmark/0063_rt_valid.csv \
 --pretrained_paths ./checkpoint/model_0063_tstl_pre0.pt ./checkpoint/model_0063_tstl_pre1.pt ./checkpoint/model_0063_tstl_pre2.pt \
 --checkpoint_paths ./checkpoint/model_0063_tstl_ft0.pt ./checkpoint/model_0063_tstl_ft1.pt ./checkpoint/model_0063_tstl_ft2.pt \
 --ensemble_path ./checkpoint/model_0063_tstl_best.pt \
---result ./results/model_0063_tstl_results.csv
+--result_path ./results/model_0063_tstl_results.csv
 ```
 
 <!-- ## TODO

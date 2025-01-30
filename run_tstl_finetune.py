@@ -2,8 +2,7 @@ import os
 import argparse
 import yaml
 import torch
-from model import MolNet_RT
-from trainer import TSTL_FtTrainer
+from tstl import MolNet_RT, TSTL_FtTrainer
 
 def main():
 	parser = argparse.ArgumentParser(description='Molecular Retention Time Prediction')
@@ -17,7 +16,7 @@ def main():
 					  help='paths to save checkpoints for each pretrained model')
 	parser.add_argument('--ensemble_path', type=str, default='',
 					  help='path to save ensemble model')
-	parser.add_argument('--result', type=str, default='',
+	parser.add_argument('--result_path', type=str, default='',
 					  help='results save path')
 	parser.add_argument('--pretrained_paths', type=str, nargs='+', default=[],
 					  help='paths to different pretrained models')
@@ -46,10 +45,8 @@ def main():
 	# Initialize model
 	model = MolNet_RT(config['model'])
 
-	# Initialize trainer
+	# Base trainer (prints directly)
 	trainer = TSTL_FtTrainer(model, config, device, args.seed)
-
-	# Run transfer learning followed by model soup creation
 	trainer.fit(
 		data_path=args.data,
 		data_config=data_config, 
@@ -57,7 +54,7 @@ def main():
 		checkpoint_paths=args.checkpoint_paths,
 		ensemble_path=args.ensemble_path,
 		k_folds=args.folds,
-		result_path=args.result,
+		result_path=args.result_path,
 	)
 
 if __name__ == "__main__":

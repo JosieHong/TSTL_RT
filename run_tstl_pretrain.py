@@ -4,8 +4,7 @@ import yaml
 import random
 import numpy as np
 import torch
-from model import MolNet_RT
-from trainer import TSTL_PreTrainer
+from tstl import MolNet_RT, TSTL_PreTrainer
 
 
 
