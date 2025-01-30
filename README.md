@@ -5,7 +5,7 @@
 A Task-Specific Transfer Learning Approach to Enhancing Small Molecule Retention Time Prediction with Limited Data
 
 <p align="left">
-  <img src="./img/toc.png" width="350" title="TSTL">
+  <img src="./img/toc.png" width="650" title="TSTL">
 </p>
 
 ## Set up
