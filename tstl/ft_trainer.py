@@ -14,9 +14,7 @@ from sklearn.model_selection import KFold
 from sklearn.metrics import mean_absolute_error, r2_score
 
 from .dataset import MetaMolRT_Dataset, MolRT_Dataset
-from .utils import csv2pkl_wfilter
-
-
+from .utils import csv2pkl_wfilter, LogHandler
 
 class TSTL_FtTrainer:
 	def __init__(self, model, config, device, seed=42):
@@ -25,9 +23,13 @@ class TSTL_FtTrainer:
 		self.device = device
 		self.seed = seed
 		random.seed(seed)
-		np.random.seed(seed)
-		torch.manual_seed(seed)
-		torch.cuda.manual_seed(seed)
+		self._set_seeds(seed)
+
+		self.all_data = []
+
+	def _set_seeds(self, seed): 
+		for seeder in [np.random.seed, torch.manual_seed, torch.cuda.manual_seed]:
+			seeder(seed)
 
 	def load_data(self, data_path, data_config):
 		if data_path.endswith('.csv'):
@@ -41,14 +43,12 @@ class TSTL_FtTrainer:
 			with open(data_path, 'rb') as f:
 				pkl_dict = pickle.load(f)
 
-		all_data = []
 		unique_smiles = set()
 		for idx in range(len(pkl_dict)):
 			smiles = pkl_dict[idx]['smiles']
 			if smiles not in unique_smiles:
-				all_data.append(pkl_dict[idx])
+				self.all_data.append(pkl_dict[idx])
 				unique_smiles.add(smiles)
-		return all_data
 
 	def eval_step(self, model, loader, scaler=None, return_predictions=False):
 		model.eval()
@@ -115,9 +115,64 @@ class TSTL_FtTrainer:
 		y_true = np.concatenate(y_true)
 		y_pred = np.concatenate(y_pred)
 		return mean_absolute_error(y_true, y_pred), r2_score(y_true, y_pred), total_loss/len(loader)
+			
+	def train_fold(self, model, train_loader, valid_loader, fold_idx, pretrain_idx, scaler, checkpoint_path, log_path=None): 
+		with LogHandler(log_path) as log_handler: 
+			print(f"\nModel {pretrain_idx + 1} - Training fold {fold_idx + 1}...")
+
+			optimizer = optim.AdamW(
+				model.parameters(),
+				lr=self.config['train']['lr'],
+				weight_decay=self.config['train']['weight_decay']
+			)
+			scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+				optimizer, mode='min', factor=self.config['train']['lr_factor'],
+				patience=self.config['train']['lr_patience'], min_lr=1e-7
+			)
+
+			best_valid_mae = float('inf')
+			best_valid_r2 = float('-inf')
+			early_stop_patience = 0
+			early_stop_step = self.config['train']['early_stop_step']
+
+			for epoch in range(1, self.config['train']['epochs'] + 1):
+				train_mae, train_r2, train_loss = self.train_step(model, train_loader, optimizer, scaler)
+				valid_mae, valid_r2, y_true, y_pred = self.eval_step(model, valid_loader, scaler, return_predictions=True)
+				
+				if valid_mae < best_valid_mae:
+					best_valid_mae = valid_mae
+					best_valid_r2 = valid_r2
+					early_stop_patience = 0
+
+					checkpoint = {
+						'epoch': epoch,
+						'model_state_dict': model.state_dict(),
+						'optimizer_state_dict': optimizer.state_dict(),
+						'scheduler_state_dict': scheduler.state_dict(),
+						'best_val_mae': best_valid_mae,
+						'fold': fold_idx
+					}
+					torch.save(checkpoint, checkpoint_path.replace('.pt', f'_fold{fold_idx}.pt'))
+				else:
+					early_stop_patience += 1
+					if early_stop_patience >= early_stop_step:
+						log_handler.write("Early stopping triggered")
+						break
+
+				log_handler.write(
+					f"\nModel {pretrain_idx} Fold {fold_idx} Epoch {epoch}:\n"
+					f"Train: MAE={train_mae:.4f}, R2={train_r2:.4f}, Loss={train_loss:.4f}\n"
+					f"Valid: MAE={valid_mae:.4f}, R2={valid_r2:.4f}\n"
+					f"Best valid MAE: {best_valid_mae:.4f}, R2: {best_valid_r2:.4f}\n"
+					f"Early stopping patience: {early_stop_patience}/{early_stop_step}"
+				)
+
+				scheduler.step(valid_mae)
+
+		return best_valid_mae, best_valid_r2
 
 	@staticmethod
-	def average_model_weights(state_dicts): 
+	def _average_model_weights(state_dicts): 
 		if not state_dicts:
 			raise ValueError("Empty state dictionaries list")
 		
@@ -132,134 +187,73 @@ class TSTL_FtTrainer:
 		
 		return avg_state_dict
 
-	def print_or_log(self, message, log_handler=None):
-		"""Utility method to handle both direct printing and logging"""
-		if log_handler:
-			log_handler.write(message)
-		else:
-			print(message)
+	def create_model_soup(self, model, train_loader, valid_loader, fold_idx, scaler, checkpoint_paths, 
+					ensemble_path, log_path=None): 
+		with LogHandler(log_path) as log_handler:
+			checkpoints = [torch.load(path.replace('.pt', f'_fold{fold_idx}.pt'), map_location=self.device) 
+						for path in checkpoint_paths]
+			state_dicts = [checkpoint['model_state_dict'] for checkpoint in checkpoints]
 			
-	def train_fold(self, model, train_loader, valid_loader, fold_idx, scaler, checkpoint_path, log_handler=None): 
-		"""Modified train_fold to support both direct printing and logging"""
-		optimizer = optim.AdamW(
-			model.parameters(),
-			lr=self.config['train']['lr'],
-			weight_decay=self.config['train']['weight_decay']
-		)
-		scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-			optimizer, mode='min', factor=self.config['train']['lr_factor'],
-			patience=self.config['train']['lr_patience'], min_lr=1e-7
-		)
-
-		best_valid_mae = float('inf')
-		best_valid_r2 = float('-inf')
-		early_stop_patience = 0
-		early_stop_step = self.config['train']['early_stop_step']
-
-		for epoch in range(1, self.config['train']['epochs'] + 1):
-			train_mae, train_r2, train_loss = self.train_step(model, train_loader, optimizer, scaler)
-			valid_mae, valid_r2, y_true, y_pred = self.eval_step(model, valid_loader, scaler, return_predictions=True)
+			# Evaluate models
+			metrics = []
+			for idx, state_dict in enumerate(state_dicts): 
+				model.load_state_dict(state_dict)
+				train_mae, train_r2 = self.eval_step(model, train_loader, scaler)
+				harmonic_mean = 2 * (1/train_mae) * train_r2 / ((1/train_mae) + train_r2)
+				metrics.append(harmonic_mean - (0.8 if idx < 2 else 0))
+				log_handler.write(f"Model {idx + 1} Evaluation - MAE: {train_mae:.4f}, R2: {train_r2:.4f}")
 			
-			if valid_mae < best_valid_mae:
-				best_valid_mae = valid_mae
-				best_valid_r2 = valid_r2
-				early_stop_patience = 0
-
-				checkpoint = {
-					'epoch': epoch,
-					'model_state_dict': model.state_dict(),
-					'optimizer_state_dict': optimizer.state_dict(),
-					'scheduler_state_dict': scheduler.state_dict(),
-					'best_val_mae': best_valid_mae,
-					'fold': fold_idx
-				}
-				torch.save(checkpoint, checkpoint_path.replace('.pt', f'_fold{fold_idx}.pt'))
-				self.print_or_log(f"Saved new best model - MAE: {best_valid_mae:.4f}, R2: {best_valid_r2:.4f}", log_handler)
+			# Sort and create soup
+			soups = []
+			best_harm = 0
+			best_metrics = {'MAE': float('inf'), 'R2': float('-inf')}
+			
+			for state_dict, metric in sorted(zip(state_dicts, metrics), key=lambda x: x[1], reverse=True):
+				model.load_state_dict(state_dict)
+				train_mae, train_r2 = self.eval_step(model, train_loader, scaler)
+				
+				current_harm = 2 * (1/train_mae) * train_r2 / ((1/train_mae) + train_r2)
+				if train_mae > 0 and train_r2 > 0 and current_harm > best_harm:
+					soups.append(state_dict)
+					best_harm = current_harm
+					valid_mae, valid_r2 = self.eval_step(model, valid_loader, scaler)
+					best_metrics = {'MAE': valid_mae, 'R2': valid_r2}
+					log_handler.write(f"Added model to soup - Valid MAE: {valid_mae:.4f}, R2: {valid_r2:.4f}")
+			
+			# Save soup model
+			if soups:
+				torch.save(
+					{'model_state_dict': self._average_model_weights(soups)},
+					ensemble_path.replace('.pt', f'_fold{fold_idx}.pt')
+				)
+				log_handler.write(f"Saved model soup with {len(soups)} models")
 			else:
-				early_stop_patience += 1
-				if early_stop_patience >= early_stop_step:
-					self.print_or_log("Early stopping triggered", log_handler)
-					break
+				error_msg = "No models selected for model soup"
+				log_handler.write(error_msg)
+				raise ValueError(error_msg)
 
-			self.print_or_log(
-				f"\nFold {fold_idx} Epoch {epoch}:\n"
-				f"Train: MAE={train_mae:.4f}, R2={train_r2:.4f}, Loss={train_loss:.4f}\n"
-				f"Valid: MAE={valid_mae:.4f}, R2={valid_r2:.4f}\n"
-				f"Best valid MAE: {best_valid_mae:.4f}, R2: {best_valid_r2:.4f}\n"
-				f"Early stopping patience: {early_stop_patience}/{early_stop_step}",
-				log_handler
-			)
-
-			scheduler.step(valid_mae)
-
-		return best_valid_mae, best_valid_r2
-
-	def create_model_soup(self, model, train_loader, valid_loader, fold_idx, scaler, pretrain_paths, checkpoint_path, log_handler=None):
-		"""Modified create_model_soup to support both direct printing and logging"""
-		checkpoints = [torch.load(path.replace('.pt', f'_fold{fold_idx}.pt'), map_location=self.device) 
-					  for path in pretrain_paths]
-		state_dicts = [checkpoint['model_state_dict'] for checkpoint in checkpoints]
-		
-		# Evaluate models
-		metrics = []
-		for idx, state_dict in enumerate(state_dicts):
-			model.load_state_dict(state_dict)
-			train_mae, train_r2 = self.eval_step(model, train_loader, scaler)
-			harmonic_mean = 2 * (1/train_mae) * train_r2 / ((1/train_mae) + train_r2)
-			metrics.append(harmonic_mean - (0.8 if idx < 2 else 0))
-			self.print_or_log(f"Model {idx + 1} Evaluation - MAE: {train_mae:.4f}, R2: {train_r2:.4f}", log_handler)
-		
-		# Sort and create soup
-		soups = []
-		best_harm = 0
-		best_metrics = {'mae': float('inf'), 'r2': float('-inf')}
-		
-		for state_dict, metric in sorted(zip(state_dicts, metrics), key=lambda x: x[1], reverse=True):
-			model.load_state_dict(state_dict)
-			train_mae, train_r2 = self.eval_step(model, train_loader, scaler)
-			
-			if (train_mae > 0 and train_r2 > 0 and 
-				2 * (1/train_mae) * train_r2 / ((1/train_mae) + train_r2) > best_harm):
-				soups.append(state_dict)
-				valid_mae, valid_r2 = self.eval_step(model, valid_loader, scaler)
-				best_metrics = {'mae': valid_mae, 'r2': valid_r2}
-				self.print_or_log(f"Added model to soup - Valid MAE: {valid_mae:.4f}, R2: {valid_r2:.4f}", log_handler)
-
-		# Save soup model
-		if soups:
-			torch.save(
-				{'model_state_dict': self.average_model_weights(soups)},
-				checkpoint_path.replace('.pt', f'_fold{fold_idx}.pt')
-			)
-			self.print_or_log(f"Saved model soup with {len(soups)} models", log_handler)
-		else:
-			error_msg = "No models selected for model soup"
-			self.print_or_log(error_msg, log_handler)
-			raise ValueError(error_msg)
-
-		return best_metrics['mae'], best_metrics['r2']
+			return best_metrics['MAE'], best_metrics['R2']
 
 	def fit(self, data_path, data_config, pretrained_paths=[], checkpoint_paths=[], 
-		   ensemble_path='', result_path='', k_folds=5): 
-		"""Run transfer learning followed by model soup creation."""
-		all_data = self.load_data(data_path, data_config)
+		   ensemble_path='', result_path='', log_dir='', k_folds=5): 
+		self.load_data(data_path, data_config) # load data to self.all_data
 		kf = KFold(n_splits=k_folds, shuffle=True, random_state=self.seed)
-		transfer_metrics = {i: {'mae': [], 'r2': []} for i in range(len(pretrained_paths))}
-		ensemble_metrics = {'mae': [], 'r2': []}
+		transfer_metrics = {i: {'MAE': [], 'R2': []} for i in range(len(pretrained_paths))}
+		ensemble_metrics = {'MAE': [], 'R2': []}
 
 		# Create save directories if needed
-		all_paths = checkpoint_paths + ([ensemble_path] if ensemble_path else []) + ([result_path] if result_path else [])
+		all_paths = checkpoint_paths + ([ensemble_path] if ensemble_path else []) + ([result_path] if result_path else []) + ([log_dir] if log_dir else [])
 		for path in all_paths:
 			if path:
 				os.makedirs(os.path.dirname(path), exist_ok=True)
 
 		# Perform k-fold cross validation
-		for fold_idx, (train_idx, valid_idx) in enumerate(kf.split(all_data)):
-			print(f'\nProcessing Fold {fold_idx + 1}/{k_folds}')
+		for fold_idx, (train_idx, valid_idx) in enumerate(kf.split(self.all_data)):
+			print(f'\nProcessing data for Fold {fold_idx + 1}/{k_folds}')
 			
 			# Prepare data for this fold
-			train_data = [copy.deepcopy(all_data[i]) for i in train_idx]
-			valid_data = [copy.deepcopy(all_data[i]) for i in valid_idx]
+			train_data = [copy.deepcopy(self.all_data[i]) for i in train_idx]
+			valid_data = [copy.deepcopy(self.all_data[i]) for i in valid_idx]
 			
 			# Create datasets
 			train_set = MolRT_Dataset(train_data, mode='data', 
@@ -283,8 +277,8 @@ class TSTL_FtTrainer:
 			)
 
 			# Step 1: Transfer Learning Phase
-			for idx, (resume_path, checkpoint_path) in enumerate(zip(pretrained_paths, checkpoint_paths)):
-				print(f"\nTraining with pretrained model {idx + 1}/{len(pretrained_paths)}: {resume_path}")
+			for model_idx, (resume_path, checkpoint_path) in enumerate(zip(pretrained_paths, checkpoint_paths)):
+				print(f"\nTraining with pretrained model {model_idx + 1}/{len(pretrained_paths)}: {resume_path}")
 				
 				# Initialize model and load pretrained weights
 				model = copy.deepcopy(self.model).to(self.device)
@@ -296,15 +290,21 @@ class TSTL_FtTrainer:
 					)
 				
 				# Train model
+				if log_dir: 
+					log_file = checkpoint_path.split('/')[-1].replace('.pt', f'_fold{fold_idx}.log')
+					log_path = os.path.join(log_dir, log_file)
+				else:
+					log_path = None
 				mae, r2 = self.train_fold(
 					model, train_loader, valid_loader,
-					fold_idx, scaler, checkpoint_path
+					fold_idx, model_idx, scaler, checkpoint_path, 
+					log_path=log_path,  
 				)
 				
 				# Store metrics
-				transfer_metrics[idx]['mae'].append(mae)
-				transfer_metrics[idx]['r2'].append(r2)
-				print(f"Model {idx + 1} Fold {fold_idx + 1} - MAE: {mae:.4f}, R2: {r2:.4f}")
+				transfer_metrics[model_idx]['MAE'].append(mae)
+				transfer_metrics[model_idx]['R2'].append(r2)
+				print(f"\nModel {model_idx + 1} Fold {fold_idx + 1} - MAE: {mae:.4f}, R2: {r2:.4f}")
 
 			# Step 2: Ensemble Phase (Model Soup)
 			if ensemble_path:
@@ -312,74 +312,82 @@ class TSTL_FtTrainer:
 				mae, r2 = self.create_model_soup(
 					self.model.to(self.device), 
 					train_loader, valid_loader,
-					fold_idx, scaler, checkpoint_paths, ensemble_path
+					fold_idx, scaler, checkpoint_paths, ensemble_path,
+					log_path=ensemble_path.replace('.pt', f'_fold{fold_idx}.log')
 				)
-				ensemble_metrics['mae'].append(mae)
-				ensemble_metrics['r2'].append(r2)
+				ensemble_metrics['MAE'].append(mae)
+				ensemble_metrics['R2'].append(r2)
 				print(f"Ensemble Fold {fold_idx + 1} - MAE: {mae:.4f}, R2: {r2:.4f}")
 
 		# Save results
 		if result_path:
-			# Prepare transfer learning results
-			transfer_data = []
-			for model_idx in range(len(pretrained_paths)):
-				metrics = transfer_metrics[model_idx]
-				for fold_idx in range(k_folds):
-					transfer_data.append({
-						'Model': model_idx + 1,
-						'Fold': fold_idx + 1,
-						'MAE': metrics['mae'][fold_idx],
-						'R2': metrics['r2'][fold_idx]
-					})
-				# Add summary statistics
-				mae_mean, mae_std = np.mean(metrics['mae']), np.std(metrics['mae'])
-				r2_mean, r2_std = np.mean(metrics['r2']), np.std(metrics['r2'])
-				transfer_data.extend([
-					{'Model': model_idx + 1, 'Fold': 'mean', 'MAE': mae_mean, 'R2': r2_mean},
-					{'Model': model_idx + 1, 'Fold': 'std', 'MAE': mae_std, 'R2': r2_std}
-				])
-			
-			# Save transfer learning results
-			pd.DataFrame(transfer_data).to_csv(
-				result_path.replace('.csv', '_transfer.csv'), index=False)
-
-			# Save ensemble results if available
-			if ensemble_path:
-				ensemble_data = []
-				for fold_idx in range(k_folds):
-					ensemble_data.append({
-						'Fold': fold_idx + 1,
-						'MAE': ensemble_metrics['mae'][fold_idx],
-						'R2': ensemble_metrics['r2'][fold_idx]
-					})
-				# Add summary statistics
-				mae_mean, mae_std = np.mean(ensemble_metrics['mae']), np.std(ensemble_metrics['mae'])
-				r2_mean, r2_std = np.mean(ensemble_metrics['r2']), np.std(ensemble_metrics['r2'])
-				ensemble_data.extend([
-					{'Fold': 'mean', 'MAE': mae_mean, 'R2': r2_mean},
-					{'Fold': 'std', 'MAE': mae_std, 'R2': r2_std}
-				])
-				pd.DataFrame(ensemble_data).to_csv(
-					result_path.replace('.csv', '_ensemble.csv'), index=False)
+			self._save_results(transfer_metrics, ensemble_metrics, result_path, len(pretrained_paths), k_folds)
 
 		# Print final results
+		self._print_final_results(transfer_metrics, ensemble_metrics, len(pretrained_paths), ensemble_path)
+
+		return transfer_metrics, ensemble_metrics
+	
+	def _save_results(self, transfer_metrics, ensemble_metrics, result_path, pretrain_number, k_folds): 
+		# Prepare transfer learning results
+		transfer_data = []
+		for model_idx in range(pretrain_number): 
+			metrics = transfer_metrics[model_idx]
+			for fold_idx in range(k_folds):
+				transfer_data.append({
+					'Model': model_idx + 1,
+					'Fold': fold_idx + 1,
+					'MAE': metrics['MAE'][fold_idx],
+					'R2': metrics['R2'][fold_idx]
+				})
+			# Add summary statistics
+			mae_mean, mae_std = np.mean(metrics['MAE']), np.std(metrics['MAE'])
+			r2_mean, r2_std = np.mean(metrics['R2']), np.std(metrics['R2'])
+			transfer_data.extend([
+				{'Model': model_idx + 1, 'Fold': 'mean', 'MAE': mae_mean, 'R2': r2_mean},
+				{'Model': model_idx + 1, 'Fold': 'std', 'MAE': mae_std, 'R2': r2_std}
+			])
+		
+		# Save transfer learning results
+		pd.DataFrame(transfer_data).to_csv(
+			result_path.replace('.csv', '_transfer.csv'), index=False)
+
+		# Save ensemble results if available
+		if ensemble_path:
+			ensemble_data = []
+			for fold_idx in range(k_folds):
+				ensemble_data.append({
+					'Fold': fold_idx + 1,
+					'MAE': ensemble_metrics['MAE'][fold_idx],
+					'R2': ensemble_metrics['R2'][fold_idx]
+				})
+			# Add summary statistics
+			mae_mean, mae_std = np.mean(ensemble_metrics['MAE']), np.std(ensemble_metrics['MAE'])
+			r2_mean, r2_std = np.mean(ensemble_metrics['R2']), np.std(ensemble_metrics['R2'])
+			ensemble_data.extend([
+				{'Fold': 'mean', 'MAE': mae_mean, 'R2': r2_mean},
+				{'Fold': 'std', 'MAE': mae_std, 'R2': r2_std}
+			])
+			pd.DataFrame(ensemble_data).to_csv(
+				result_path.replace('.csv', '_ensemble.csv'), index=False)
+
+	def _print_final_results(self, transfer_metrics, ensemble_metrics, pretrain_number, ensemble_path): 
 		print("\n=== Final Results ===")
 		print("\nTransfer Learning Results:")
-		for model_idx in range(len(pretrained_paths)):
+		for model_idx in range(pretrain_number):
 			metrics = transfer_metrics[model_idx]
-			mae_mean, mae_std = np.mean(metrics['mae']), np.std(metrics['mae'])
-			r2_mean, r2_std = np.mean(metrics['r2']), np.std(metrics['r2'])
+			mae_mean, mae_std = np.mean(metrics['MAE']), np.std(metrics['MAE'])
+			r2_mean, r2_std = np.mean(metrics['R2']), np.std(metrics['R2'])
 			print(f"Model {model_idx + 1}:")
 			print(f"MAE: {mae_mean:.4f} ± {mae_std:.4f}")
 			print(f"R2: {r2_mean:.4f} ± {r2_std:.4f}\n")
 
 		if ensemble_path:
 			print("Ensemble Results:")
-			mae_mean = np.mean(ensemble_metrics['mae'])
-			mae_std = np.std(ensemble_metrics['mae'])
-			r2_mean = np.mean(ensemble_metrics['r2'])
-			r2_std = np.std(ensemble_metrics['r2'])
+			mae_mean = np.mean(ensemble_metrics['MAE'])
+			mae_std = np.std(ensemble_metrics['MAE'])
+			r2_mean = np.mean(ensemble_metrics['R2'])
+			r2_std = np.std(ensemble_metrics['R2'])
 			print(f"MAE: {mae_mean:.4f} ± {mae_std:.4f}")
 			print(f"R2: {r2_mean:.4f} ± {r2_std:.4f}")
 
-		return transfer_metrics, ensemble_metrics

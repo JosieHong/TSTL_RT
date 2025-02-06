@@ -170,3 +170,4 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
+tstl/ft_trainer.py.lbfgs.bak

@@ -57,7 +57,7 @@ python run_tstl_pretrain.py \
 --pretrain_task_path ./data/raw_all/pretrain_0_rt.csv \
 --valid_task_paths ./data/benchmark/0063_rt_valid.csv \
 --model_config ./config_pretrain.yml \
---checkpoint_path ./checkpoint/model_0063_tstl_pre0.pt \
+--checkpoint_path ./checkpoint/0063_pre0.pt \
 --device 1
 
 python run_tstl_pretrain.py \
@@ -65,7 +65,7 @@ python run_tstl_pretrain.py \
 --pretrain_task_path ./data/raw_all/pretrain_1_rt.csv \
 --valid_task_paths ./data/benchmark/0063_rt_valid.csv \
 --model_config ./config_pretrain.yml \
---checkpoint_path ./checkpoint/model_0063_tstl_pre1.pt \
+--checkpoint_path ./checkpoint/0063_pre1.pt \
 --device 1
 
 python run_tstl_pretrain.py \
@@ -73,7 +73,7 @@ python run_tstl_pretrain.py \
 --pretrain_task_path ./data/raw_all/pretrain_2_rt.csv \
 --valid_task_paths ./data/benchmark/0063_rt_valid.csv \
 --model_config ./config_pretrain.yml \
---checkpoint_path ./checkpoint/model_0063_tstl_pre2.pt \
+--checkpoint_path ./checkpoint/0063_pre2.pt \
 --device 1
 ```
 
@@ -82,16 +82,27 @@ python run_tstl_pretrain.py \
 ```bash
 python run_tstl_finetune.py --data ./data/benchmark/0063_rt_valid.csv \
 --model_config ./config_finetune.yml \
---pretrained_paths ./checkpoint/model_0063_tstl_pre0.pt ./checkpoint/model_0063_tstl_pre1.pt ./checkpoint/model_0063_tstl_pre2.pt \
---checkpoint_paths ./checkpoint/model_0063_tstl_ft0.pt ./checkpoint/model_0063_tstl_ft1.pt ./checkpoint/model_0063_tstl_ft2.pt \
---ensemble_path ./checkpoint/model_0063_tstl_best.pt \
---result_path ./results/model_0063_tstl_results.csv
+--pretrained_paths ./checkpoint/0063_pre0.pt ./checkpoint/0063_pre1.pt ./checkpoint/0063_pre2.pt \
+--checkpoint_paths ./checkpoint/0063_ft0.pt ./checkpoint/0063_ft1.pt ./checkpoint/0063_ft2.pt \
+--ensemble_path ./checkpoint/0063_ensemble.pt \
+--result_path ./result/0063_results.csv 
+
+# Running fine-tuning from 3 pre-trained models in parallel: 
+python run_tstl_finetune.py --data ./data/benchmark/0063_rt_valid.pkl \
+--model_config ./config_finetune.yml \
+--pretrained_paths ./checkpoint/0063_pre0.pt ./checkpoint/0063_pre1.pt ./checkpoint/0063_pre2.pt \
+--checkpoint_paths ./checkpoint/0063_ft0.pt ./checkpoint/0063_ft1.pt ./checkpoint/0063_ft2.pt \
+--ensemble_path ./checkpoint/0063_ensemble.pt \
+--result_path ./result/0063_results.csv \
+--parallel \
+--log_dir ./log/
 ```
 
 <!-- ## TODO
 
-- [ ] make them running in parallel
-- [ ] LBFGS optimizer -->
+- [x] make them running in parallel
+- [x] handle the logs
+- [ ] support of GNN, GIN, MPNN -->
 
 ## Citation
 

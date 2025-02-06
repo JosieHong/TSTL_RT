@@ -16,6 +16,29 @@ from rdkit.Chem import AllChem, rdDepictor
 
 
 
+class LogHandler:
+	def __init__(self, log_path=None):
+		self.log_path = log_path
+		self.file = None
+		if log_path:
+			self.file = open(log_path, 'w')
+
+	def write(self, message):
+		# print(message)  # Always print to console
+		if self.file:
+			self.file.write(message + '\n')
+			self.file.flush()  # Ensure writing to disk immediately
+
+	def close(self):
+		if self.file:
+			self.file.close()
+
+	def __enter__(self):
+		return self
+
+	def __exit__(self, exc_type, exc_val, exc_tb):
+		self.close()
+
 def conformation_array(smiles, conf_type): 
 	# convert smiles to molecule
 	if conf_type == 'etkdg': 

@@ -10,7 +10,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader, Subset
 
-from utils import csv2pkl_wfilter, conformation_array
+from .utils import csv2pkl_wfilter, conformation_array
 
 class MetaMolRT_Dataset(Dataset): 
 	"""Extended dataset class for meta-learning"""
@@ -155,7 +155,7 @@ class MolRT_Dataset(Dataset):
 			rt_values = np.array([item['rt'] for item in self.data]).reshape(-1, 1)
 			self.scaler = StandardScaler()
 			scaled_rt = self.scaler.fit_transform(rt_values)
-			print('Fitted scaler with mean: {} and std: {}'.format(self.scaler.mean_, self.scaler.scale_))
+			# print('Fitted scaler with mean: {} and std: {}'.format(self.scaler.mean_, self.scaler.scale_))
 		for idx, rt in enumerate(scaled_rt):
 			self.data[idx]['rt'] = rt.item()
 
